@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>webrtc</title>
+  <style>
+    #error{
+      color: red;
+    }
+  </style>
+</head>
+<body>
+  <h1 id="id">ID:-</h1>
+  <div id="error" style="display: none;">出现错误:xxx</div>
+  <!-- <div id="form">
+    <input id="input" type="text"><button id="btn">加入房间</button>
+  </div> -->
+  <p>
+    <button id="add">创建房间</button>
+    <button id="leave" style="display: none;">退出房间</button>
+  </p>
+  <div class="list">
+    <div class="item">
+      <span>房间id:xx</span>
+      <button class="item-btn">加入房间</button>
+    </div>
+  </div>
+  <div class="videos"></div>
+  <script>
+    const videos = document.querySelector('.videos')
+    const id = document.getElementById('id')
+    const form = document.getElementById('form')
+    const input = document.getElementById('input')
+    const addBtn = document.getElementById('add')
+    const leaveBtn = document.getElementById('leave')
+    const error = document.getElementById('error')
+    const list = document.querySelector('.list')
+    let info = {}
+    let pcs = {}
+    let stream = new MediaStream()
+    try {
+      // 获取媒体信息
+      navigator.mediaDevices.getUserMedia({ audio: false, video: true })
+      .then(function(st) {
+        stream = st
+      })
+      .catch(function(err) {
+        /* 处理error */
+        console.log(err)
+      });
+    } catch (error) {
+    }
+    /**
+     * 显示错误 
+     **/
+    function showError(msg) {
+      error.innerHTML = msg
+      error.style.display = 'block'
+      setTimeout(() => {
+        error.style.display = 'none'
+      }, 1000)
+    }
+    /** 
+     * 发送数据 
+     **/
+    function sendMessage(type, data) {
+      console.log('send', type, data)
+      ws.send(JSON.stringify({
+        type,
+        data
+      }))
+    }
+    // 初始化
+    function initEvent() {
+      // 创建房间
+      addBtn.addEventListener('click', () => {
+        sendMessage('createRoom')
+        // 控制界面显示
+        addBtn.style.display = 'none'
+        leaveBtn.style.display = 'block'
+        list.style.display = 'none'
+      })
+      // 离开房间
+      leaveBtn.addEventListener('click', () => {
+        sendMessage('leaveRoom')
+        // videos.innerHTML = ''
+        Object.keys(pcs).forEach(id => {
+          leaveRoom(id)
+        })
+        // 控制显示
+        leaveBtn.style.display = 'none'
+        addBtn.style.display = 'block'
+        list.style.display = 'block'
+        sendMessage('init')
+      })
+    }
+    // 加入
+    function join(id) {
+      sendMessage('joinRoom', id)
+      // 控制界面显示
+      addBtn.style.display = 'none'
+      leaveBtn.style.display = 'block'
+      list.style.display = 'none'
+    }
+    // 初始化
+    function init(data) {
+      info.data = data
+      id.innerHTML = `ID:${data.id}`
+      list.innerHTML = data.rooms.map(item => `<div class="item">
+      <span>房间id:${item.id} 人数:${item.players.length}</span>
+      <button class="item-btn" onclick="join(${item.id})">加入房间</button>
+    </div>`)
+    }
+    // 创建链接
+    function createConnection(player) {
+      // stun和turn服务器
+      const iceServer = {
+        "iceServers": [{
+          "url": "stun:stun.l.google.com:19302"
+        }, {
+          "url": "turn:numb.viagenie.ca",
+          "username": "webrtc@live.com",
+          "credential": "muazkh"
+        }]
+      }
+      const pc = pcs[player] = new RTCPeerConnection(iceServer)
+      pc.addStream(stream)
+      pc._player = player
+      return pc
+    }
+    // 初始化rtc事件
+    function initRTCEvent(pc) {
+      // 获取流信息
+      pc.ontrack = ev => {
+        // console.log(ev)
+        // 创建video
+        const video = pc._video = document.createElement('video')
+        // 判断stream
+        if (ev.streams && ev.streams[0]) {
+          video.srcObject = ev.streams[0];
+        } else {
+          let inboundStream = new MediaStream([ev.track]);
+          console.log(inboundStream)
+          video.srcObject = inboundStream;
+        }
+        // 加载成功后
+        video.onloadedmetadata = function(e) {
+          console.log('播放视频')
+          video.play();
+        };
+        // 插入
+        videos.appendChild(video)
+      }
+      // 交换ice
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          // 发送ice
+          sendMessage('rtc_icecandidate', {
+            id: pc._player,
+            data: e.candidate
+          })
+        } 
+      };
+    }
+    // 创建offer
+    function createOffer(pc) {
+      return new Promise((resolve) => {
+        pc.createOffer().then((offer) => {
+          console.log('createOffer', offer)
+          pc.setLocalDescription(offer).then(() => {
+            resolve(offer)
+          })
+        })
+      })
+    }
+    // 加入房间
+    function joinRoom(data) {
+      const { id, players = [] } = data
+      // 判断玩家数量
+      if (players.length > 1) {
+        // 遍历
+        players.forEach(player => {
+          if (player === info.data.id) return
+          // 创建链接
+          const pc = createConnection(player)
+          // 初始化rtc事件
+          initRTCEvent(pc)
+          // 创建offer
+          createOffer(pc).then(offer => {
+            // 发送信息
+            sendMessage('rtc_offer', {
+              id: player,
+              data: offer.sdp
+            })
+          })
+        })
+      }
+    }
+    // 退出房间
+    function leaveRoom(data) {
+      const pc = pcs[data]
+      if (pc) {
+        pc._video.remove()
+        pc._player = null
+        pcs[data] = null
+        pc.close()
+      }
+    }
+    // 创建回应
+    function createAnswer(pc, sdp) {
+      return new Promise(resolve => {
+        pc.setRemoteDescription({
+          type: 'offer',
+          sdp
+        }).then(() => {
+          pc.createAnswer().then((answer) => {
+            console.log('createAnswer', answer)
+            pc.setLocalDescription(answer).then(() => {
+              resolve(answer)
+            })
+          })
+        })
+      })
+    }
+    // 回复offer
+    function replyOffer(msg) {
+      const { id, data } = msg
+      console.log('replyOffer:', id, data)
+      // 创建链接
+      const pc = createConnection(id)
+      // 初始化rtc事件
+      initRTCEvent(pc)
+      // 创建回应
+      createAnswer(pc, data).then(answer => {
+        sendMessage('rtc_answer', {
+          id,
+          data: answer.sdp
+        })
+      })
+    }
+    // 接受回应
+    function receiveAnswer(msg) {
+      const { id, data } = msg
+      // 设置远程描述
+      pcs[id].setRemoteDescription(new RTCSessionDescription({
+        type: 'answer',
+        sdp: data
+      }))
+    }
+    // 添加ice
+    function addIceCandidate(msg) {
+      const { id, data } = msg
+      pcs[id].addIceCandidate(data);
+    }
+    initEvent()
+    const ws = new WebSocket("ws://127.0.0.1:9900");
+    ws.addEventListener('message', (e) => {
+      const data = JSON.parse(e.data)
+      if (data.type === 'init') { // 初始化
+        init(data.data)
+      } else if (data.type === 'joinRoom') { // 加入房间
+        joinRoom(data.data)
+      } else if (data.type === 'leaveRoom') { // 退出房间
+        leaveRoom(data.data)
+      } else if (data.type === 'rtc_offer') { // rtc发起者事件,需要进行回应
+        replyOffer(data.data) // 回复offer
+      } else if (data.type === 'rtc_answer') { // rtc回应事件,需要进行关联
+        receiveAnswer(data.data) // 回复offer
+      } else if (data.type === 'rtc_icecandidate') { // rtc回应事件,需要进行关联
+        addIceCandidate(data.data)
+      } else if (data.type === 'error') {
+        showError(data.data)
+      }
+      console.log('wsMessageData', data)
+    })
+  </script>
+</body>
+</html>
